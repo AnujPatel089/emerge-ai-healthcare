@@ -104,29 +104,35 @@ test_emergeai.db*
 node_modules/
 
 # =========================
-# Large ML Artifacts (Optional)
-# Uncomment if models are too large
+# ML Artifacts
+# Small inference models are committed so Render can load them at runtime.
+# Files > 10 MB or generated/backup artifacts are excluded.
 # =========================
-# *.pkl
-# *.joblib
-*.pkl
-*.joblib
+# Large model files — too big for git (hundreds of MB to GB)
+models/triage_baseline_model.pkl
+models/triage_xgboost_balanced_model.pkl
+models/triage_xgboost_model.pkl
+models/emergency_triage_model.pkl
+# Backup models are generated at runtime, not source artifacts
+models/backups/
+backend/models/
+
+# Other large binary formats
 *.pt
 *.pth
 *.h5
 *.rdata
 *.csv
 *.pdf
+
 data/
-models/
-backend/models/
+
+# =========================
+# Reports (generated at runtime)
+# =========================
 reports/
 !reports/
 reports/*
 !reports/model_cards/
 !reports/model_cards/*.md
 shap_outputs/
-*.csv
-*.rdata
-*.pkl
-*.joblib

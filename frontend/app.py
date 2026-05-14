@@ -2283,14 +2283,24 @@ elif page == "Live Prediction":
                 or result.get("log_id")
             )
 
-            st.success("✅ Prediction completed successfully.")
+            if result.get("prediction_source") == "fallback_rules":
+                st.warning(
+                    "AI model unavailable — rule-based triage used. "
+                    "Clinician review required before acting on this result."
+                )
+            else:
+                st.success("✅ Prediction completed successfully.")
 
         else:
             handle_response_error(response)
 
     result = st.session_state.last_prediction
     if result:
-        final_prediction_text = str(result.get("final_prediction", "N/A"))
+        is_fallback = result.get("prediction_source") == "fallback_rules"
+        raw_final = result.get("final_prediction") or result.get("ml_prediction")
+        final_prediction_text = str(raw_final) if raw_final else "Unavailable"
+        if is_fallback and raw_final:
+            final_prediction_text = f"{raw_final} (Fallback)"
         confidence = float(result.get("confidence", 0) or 0)
 
         prediction_clean = final_prediction_text.lower()
@@ -2307,11 +2317,13 @@ elif page == "Live Prediction":
             result_icon = "🟢"
             clinical_status = "Stable / Moderate"
 
+        conf_display = f"{confidence:.2%}" if not is_fallback else "N/A (rule-based)"
+
         st.markdown(
             f"""
             <div class="{card_class}">
                 <h2>{result_icon} Final Prediction: {final_prediction_text}</h2>
-                <p>Clinical status: <b>{clinical_status}</b> | Prediction ID: <b>{st.session_state.prediction_id}</b> | Confidence: <b>{confidence:.2%}</b></p>
+                <p>Clinical status: <b>{clinical_status}</b> | Prediction ID: <b>{st.session_state.prediction_id}</b> | Confidence: <b>{conf_display}</b></p>
             </div>
             """,
             unsafe_allow_html=True
@@ -2355,13 +2367,13 @@ elif page == "Live Prediction":
 
         r1, r2, r3, r4 = st.columns(4)
         with r1:
-            st.metric("ML Prediction", result.get("ml_prediction"))
+            st.metric("ML Prediction", result.get("ml_prediction") or "Rule-based")
         with r2:
-            st.metric("Final Prediction", result.get("final_prediction"))
+            st.metric("Final Prediction", result.get("final_prediction") or final_prediction_text)
         with r3:
-            st.metric("Confidence", f"{confidence:.1%}")
+            st.metric("Confidence", f"{confidence:.1%}" if not is_fallback else "N/A")
         with r4:
-            st.metric("Prediction ID", st.session_state.prediction_id)
+            st.metric("Prediction ID", st.session_state.prediction_id or "Not saved")
         style_metric_cards()
 
         action1, action2, action3 = st.columns(3)

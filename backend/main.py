@@ -490,8 +490,16 @@ NON_MODEL_FIELDS = [
     "cv_analysis"
 ]
 
-EXPECTED_MODEL_COLUMNS = [
+# Columns passed to the sklearn Pipeline (triage_xgboost_balanced.pkl).
+# The Pipeline was trained with a ColumnTransformer that applies OneHotEncoder
+# to the four categorical columns and StandardScaler to the fifteen numeric ones.
+# Pass raw values here — the Pipeline handles encoding internally.
+PIPELINE_INPUT_COLUMNS = [
     "age",
+    "gender",
+    "race",
+    "ethnicity",
+    "arrivalmode",
     "triage_vital_hr",
     "triage_vital_sbp",
     "triage_vital_dbp",
@@ -506,12 +514,6 @@ EXPECTED_MODEL_COLUMNS = [
     "cc_dizziness",
     "cc_syncope",
     "cc_weakness",
-    "gender_Male",
-    "race_Asian",
-    "race_White",
-    "ethnicity_Non-Hispanic",
-    "arrivalmode_Ambulance",
-    "arrivalmode_Walk-in"
 ]
 
 
@@ -521,22 +523,10 @@ def prepare_model_input(patient_dict: dict) -> tuple[dict, pd.DataFrame]:
     for field in NON_MODEL_FIELDS:
         model_input_dict.pop(field, None)
 
-    input_df = pd.DataFrame([model_input_dict])
-
-    # One-hot encoding exactly matching training columns.
-    input_df["gender_Male"] = 1 if model_input_dict.get("gender") == "Male" else 0
-    input_df["race_Asian"] = 1 if model_input_dict.get("race") == "Asian" else 0
-    input_df["race_White"] = 1 if model_input_dict.get("race") == "White" else 0
-    input_df["ethnicity_Non-Hispanic"] = 1 if model_input_dict.get("ethnicity") == "Non-Hispanic" else 0
-    input_df["arrivalmode_Ambulance"] = 1 if model_input_dict.get("arrivalmode") == "Ambulance" else 0
-    input_df["arrivalmode_Walk-in"] = 1 if model_input_dict.get("arrivalmode") == "Walk-in" else 0
-
-    input_df = input_df.drop(
-        columns=["gender", "race", "ethnicity", "arrivalmode"],
-        errors="ignore"
-    )
-
-    input_df = input_df.reindex(columns=EXPECTED_MODEL_COLUMNS, fill_value=0)
+    # Build a single-row DataFrame with the raw categorical values intact so the
+    # sklearn Pipeline's ColumnTransformer can apply OneHotEncoder as it was fitted.
+    raw_row = {col: model_input_dict.get(col) for col in PIPELINE_INPUT_COLUMNS}
+    input_df = pd.DataFrame([raw_row])
 
     return model_input_dict, input_df
 
@@ -699,6 +689,21 @@ def ensure_mlops_bootstrap():
 
 
 ensure_mlops_bootstrap()
+
+# Log model load status at startup so Render build logs show whether the model
+# was found on disk or whether fallback rule-based triage will be used.
+_startup_bundle = load_model_bundle()
+if _startup_bundle.get("available"):
+    print(
+        f"[STARTUP] ML model loaded: {_startup_bundle.get('model_path')} | "
+        f"encoder: {_startup_bundle.get('label_encoder_path')}"
+    )
+else:
+    print(
+        f"[STARTUP] WARNING: ML model unavailable — fallback rule-based triage active. "
+        f"model_error={_startup_bundle.get('model_error')} | "
+        f"encoder_error={_startup_bundle.get('label_encoder_error')}"
+    )
 
 
 def ensure_app_user_columns():
@@ -1895,13 +1900,23 @@ def predict(
         finally:
             incident_db.close()
         fallback = fallback_rule_based_triage(model_input_dict)
+        fallback_log_id = save_prediction_log(
+            patient_data=patient_dict,
+            ml_prediction=fallback["ml_prediction"],
+            final_prediction=fallback["final_prediction"],
+            safety_reasons=fallback["safety_reasons"],
+            clinical_explanations=fallback["clinical_explanations"],
+            confidence=None,
+            source=current_user["username"],
+            feedback="Pending",
+        )
         return {
             "status": "success",
             "prediction_source": "fallback_rules",
             "user": current_user["username"],
             "role": current_user["role"],
-            "prediction_id": None,
-            "log_id": None,
+            "prediction_id": fallback_log_id,
+            "log_id": fallback_log_id,
             "ml_prediction": fallback["ml_prediction"],
             "final_prediction": fallback["final_prediction"],
             "confidence": fallback["confidence"],
@@ -1909,7 +1924,7 @@ def predict(
             "clinical_explanations": fallback["clinical_explanations"],
             "guardrails": fallback["guardrails"],
             "message": "Fallback rule-based triage used. Clinician review required.",
-            "log_status": "Database prediction log skipped because ML model is unavailable",
+            "log_status": "Saved to PostgreSQL (fallback prediction)" if fallback_log_id else "DB save failed — prediction result still returned",
         }
 
     try:
@@ -1962,13 +1977,23 @@ def predict(
         finally:
             failure_db.close()
         fallback = fallback_rule_based_triage(model_input_dict)
+        fallback_log_id = save_prediction_log(
+            patient_data=patient_dict,
+            ml_prediction=fallback["ml_prediction"],
+            final_prediction=fallback["final_prediction"],
+            safety_reasons=fallback["safety_reasons"],
+            clinical_explanations=fallback["clinical_explanations"],
+            confidence=None,
+            source=current_user["username"],
+            feedback="Pending",
+        )
         return {
             "status": "success",
             "prediction_source": "fallback_rules",
             "user": current_user["username"],
             "role": current_user["role"],
-            "prediction_id": None,
-            "log_id": None,
+            "prediction_id": fallback_log_id,
+            "log_id": fallback_log_id,
             "ml_prediction": fallback["ml_prediction"],
             "final_prediction": fallback["final_prediction"],
             "confidence": fallback["confidence"],
@@ -1976,7 +2001,7 @@ def predict(
             "clinical_explanations": fallback["clinical_explanations"],
             "guardrails": fallback["guardrails"],
             "message": "Fallback rule-based triage used. Clinician review required.",
-            "log_status": "Fallback prediction returned after ML prediction failure",
+            "log_status": "Saved to PostgreSQL (fallback prediction)" if fallback_log_id else "DB save failed — prediction result still returned",
         }
 
     final_prediction, reasons = apply_safety_rules(
@@ -2003,9 +2028,11 @@ def predict(
     )
 
     if log_id is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Prediction completed but failed to save in PostgreSQL"
+        # DB save failed but the ML prediction itself succeeded. Return the
+        # result with a warning so the clinician still gets the triage output.
+        print(
+            f"[WARNING] Prediction log save failed for user={current_user['username']} "
+            f"ml={ml_prediction} final={final_prediction}. Result still returned."
         )
 
     monitoring_db = SessionLocal()
@@ -2077,7 +2104,7 @@ def predict(
         "problem_description_saved": patient.problem_description is not None,
         "nlp_saved": patient.llm_ready_text is not None,
         "cv_saved": patient.cv_analysis is not None,
-        "log_status": "Saved to PostgreSQL successfully"
+        "log_status": "Saved to PostgreSQL successfully" if log_id else "DB save failed — prediction result still returned",
     }
 
 
