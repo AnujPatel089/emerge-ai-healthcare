@@ -99,9 +99,13 @@ from src.auth import (
 from src.auth_utils import can_approve_role, can_view_registration_role, approval_level_for_role, hash_password, normalize_role
 
 # NEW: multi-modal triage + DL image + PDF report routes
-from src.api_extensions import router as v2_router
+#from src.api_extensions import router as v2_router
 from backend.routes.assignment_routes import router as assignment_router
-
+try:
+    from src.api_extensions import router as v2_router
+    DL_AVAILABLE = True
+except ImportError:
+    DL_AVAILABLE = False
 
 # -----------------------------
 # INPUT MODELS
@@ -812,7 +816,9 @@ ensure_default_nurse_records()
 # NEW: register multi-modal v2 routes
 # Adds: POST /v2/analyze-image-dl, POST /v2/triage,
 #       GET  /v2/report/{prediction_id}, GET /v2/dashboard/summary
-app.include_router(v2_router)
+#app.include_router(v2_router)
+if DL_AVAILABLE:
+    app.include_router(v2_router)
 app.include_router(assignment_router, prefix="/api/assignments", tags=["Assignments"])
 
 
