@@ -5,6 +5,4 @@ pandas
 plotly
 pillow
 numpy
-audio-recorder-streamlit
 python-dotenv
-SpeechRecognition

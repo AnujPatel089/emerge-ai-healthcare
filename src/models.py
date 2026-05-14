@@ -747,6 +747,129 @@ class AuditLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# =====================================================
+# MLOPS GOVERNANCE TABLES
+# =====================================================
+
+class MLModelRegistry(Base):
+    __tablename__ = "ml_model_registry"
+
+    id = Column(Integer, primary_key=True, index=True)
+    model_name = Column(String, nullable=False, index=True)
+    model_version = Column(String, nullable=False, unique=True, index=True)
+    model_path = Column(String, nullable=False)
+    feature_columns_path = Column(String, nullable=True)
+    training_dataset = Column(String, nullable=True)
+    training_date = Column(DateTime, default=datetime.utcnow)
+    accuracy = Column(Float, nullable=True)
+    precision = Column(Float, nullable=True)
+    recall = Column(Float, nullable=True)
+    f1_score = Column(Float, nullable=True)
+    recall_esi_1_2 = Column(Float, nullable=True)
+    confusion_matrix_path = Column(String, nullable=True)
+    feature_importance_path = Column(String, nullable=True)
+    status = Column(String, default="candidate", index=True)
+    deployed_at = Column(DateTime, nullable=True)
+    deployed_by = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class MLPredictionMonitoring(Base):
+    __tablename__ = "ml_prediction_monitoring"
+
+    id = Column(Integer, primary_key=True, index=True)
+    prediction_id = Column(Integer, ForeignKey("prediction_logs.id"), nullable=True, index=True)
+    patient_id = Column(String, nullable=True, index=True)
+    model_version = Column(String, nullable=False, index=True)
+    input_features = Column(Text, nullable=False)
+    predicted_esi = Column(String, nullable=True)
+    confidence = Column(Float, nullable=True)
+    icu_risk = Column(Float, nullable=True)
+    readmission_risk = Column(Float, nullable=True)
+    safety_rule_triggered = Column(Boolean, default=False)
+    doctor_override = Column(Boolean, default=False)
+    final_esi = Column(String, nullable=True)
+    latency_ms = Column(Float, nullable=True)
+    failed = Column(Boolean, default=False)
+    error_message = Column(Text, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class MLDriftReport(Base):
+    __tablename__ = "ml_drift_reports"
+
+    id = Column(Integer, primary_key=True, index=True)
+    model_version = Column(String, nullable=False, index=True)
+    drift_score = Column(Float, nullable=False)
+    drift_status = Column(String, nullable=False, index=True)
+    feature_drift = Column(Text, nullable=False)
+    baseline_window = Column(String, nullable=True)
+    live_window = Column(String, nullable=True)
+    recommendation = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class MLModelCard(Base):
+    __tablename__ = "ml_model_cards"
+
+    id = Column(Integer, primary_key=True, index=True)
+    model_version = Column(String, nullable=False, unique=True, index=True)
+    model_name = Column(String, nullable=False)
+    card_markdown = Column(Text, nullable=False)
+    card_path = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class PlatformIncident(Base):
+    __tablename__ = "platform_incidents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    incident_type = Column(String, nullable=False, index=True)
+    severity = Column(String, nullable=False, index=True)
+    message = Column(Text, nullable=False)
+    service = Column(String, nullable=True, index=True)
+    related_service = Column(String, nullable=True, index=True)
+    status = Column(String, default="open", index=True)
+    detected_at = Column(DateTime, default=datetime.utcnow, index=True)
+    recovery_attempted = Column(Boolean, default=False)
+    recovery_action = Column(String, nullable=True)
+    recovery_status = Column(String, default="detected", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(String, nullable=True)
+
+
+class PlatformAlert(Base):
+    __tablename__ = "platform_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alert_type = Column(String, nullable=False, index=True)
+    severity = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    status = Column(String, default="open", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(String, nullable=True)
+
+
+class PatientTimelineEvent(Base):
+    __tablename__ = "patient_timeline_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    patient_id = Column(String, nullable=False, index=True)
+    event_type = Column(String, nullable=False, index=True)
+    event_title = Column(String, nullable=False)
+    event_description = Column(Text, nullable=True)
+    actor_role = Column(String, nullable=True)
+    actor_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    metadata_json = Column(Text, nullable=True)
+
+
 class HistoricalMedicalReport(Base):
     __tablename__ = "historical_medical_reports"
 

@@ -1,0 +1,71 @@
+name: Render CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite:///./ci_emergeai.db
+      SECRET_KEY: ci-secret-key
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      CORS_ORIGINS: http://localhost:8501
+      RENDER: "false"
+      API_URL: http://127.0.0.1:8000
+      MODEL_PATH: models/triage_xgboost_balanced.pkl
+      FEATURE_COLUMNS_PATH: models/emergency_feature_columns.pkl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Import checks
+        run: |
+          python -c "import backend.main; import frontend.mlops_dashboard; import frontend.platform_dashboard; import src.mlops.model_registry; import src.platform.service_status"
+
+      - name: Model file and fallback checks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          assert Path("models").exists(), "models directory is missing"
+          assert any(Path("models").glob("*.pkl")), "no model artifact found"
+          assert Path("models/emergency_feature_columns.pkl").exists() or Path("models/retrained_feature_columns.pkl").exists()
+          PY
+
+      - name: FastAPI startup check
+        run: python -c "from backend.main import app; assert app.title"
+
+      - name: Health endpoint check
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from backend.main import app
+          data = TestClient(app).get("/health").json()
+          assert "database" in data
+          assert "model_version" in data
+          PY
+
+      - name: Render environment validation
+        run: |
+          python - <<'PY'
+          import os
+          required = ["DATABASE_URL", "SECRET_KEY", "ACCESS_TOKEN_EXPIRE_MINUTES", "CORS_ORIGINS", "API_URL", "MODEL_PATH", "FEATURE_COLUMNS_PATH"]
+          missing = [key for key in required if not os.getenv(key)]
+          assert not missing, missing
+          PY
+
+      - name: No Docker files
+        run: |
+          test ! -f Dockerfile
+          test ! -f docker-compose.yml
+
+      - name: Pytest
+        run: pytest

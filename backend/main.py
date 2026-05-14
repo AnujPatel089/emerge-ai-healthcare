@@ -3,9 +3,9 @@ FastAPI Backend
 Emergency Triage AI
 """
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from pathlib import Path
@@ -13,13 +13,13 @@ from datetime import datetime
 import pandas as pd
 import os
 import sys
-import joblib
 import subprocess
 import io
 import json
 import re
 import shutil
 import matplotlib.pyplot as plt
+import time
 from sqlalchemy import desc, or_, text
 from dotenv import load_dotenv
 
@@ -32,6 +32,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 load_dotenv(PROJECT_ROOT / ".env")
+APP_STARTED_AT = time.time()
+
+# Render Free Tier has cold starts and an ephemeral filesystem. These folders
+# are local fallbacks only; persistent metadata/logs should live in PostgreSQL.
+for local_dir in ["logs", "reports", "reports/model_cards", "reports/drift", "uploads"]:
+    os.makedirs(PROJECT_ROOT / local_dir, exist_ok=True)
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -87,7 +93,8 @@ from src.models import (
     FollowUpAppointment,
     NotificationLog,
     HistoricalMedicalReport,
-    AuditLog
+    AuditLog,
+    MLModelCard
 )
 
 from src.auth import (
@@ -97,10 +104,40 @@ from src.auth import (
     fake_users_db
 )
 from src.auth_utils import can_approve_role, can_view_registration_role, approval_level_for_role, hash_password, normalize_role
+from src.mlops.deployment_validator import validate_render_deployment
+from src.mlops.drift_monitor import compute_drift_report, latest_drift_report
+from src.mlops.model_card_generator import get_model_card, save_model_card
+from src.mlops.model_monitor import model_health
+from src.mlops.model_registry import (
+    ensure_bootstrap_registry,
+    get_current_production_model,
+    list_models,
+    promote_model,
+    write_registry_snapshot,
+)
+from src.mlops.prediction_logger import get_prediction_monitoring, log_prediction_monitoring
+from src.mlops.retrain_pipeline import run_retraining
+from src.platform.ai_reliability import ai_reliability_status
+from src.platform.fallback_manager import fallback_rule_based_triage
+from src.platform.incident_manager import create_incident, list_incidents
+from src.platform.model_loader import clear_model_cache, load_model_bundle, model_status
+from src.platform.reliability_monitor import app_logger, configure_logging, error_logger, record_request
+from src.platform.runtime_config import validate_runtime_config
+from src.platform.service_status import platform_status
+from src.platform.system_health import health_summary
+
+configure_logging()
 
 # NEW: multi-modal triage + DL image + PDF report routes
 #from src.api_extensions import router as v2_router
 from backend.routes.assignment_routes import router as assignment_router
+from backend.routes.alert_routes import build_router as build_alert_router
+from backend.routes.backup_routes import build_router as build_backup_router
+from backend.routes.command_center_routes import build_router as build_command_center_router
+from backend.routes.model_governance_routes import build_router as build_model_governance_router
+from backend.routes.patient_timeline_routes import build_router as build_patient_timeline_router
+from backend.routes.render_status_routes import build_router as build_render_status_router
+from backend.routes.self_healing_routes import build_router as build_self_healing_router
 try:
     from src.api_extensions import router as v2_router
     DL_AVAILABLE = True
@@ -159,6 +196,10 @@ class ClinicalFeedbackInput(BaseModel):
     override_esi: Optional[int] = None
     clinical_notes: Optional[str] = None
     override_reason: Optional[str] = None
+
+
+class PromoteModelInput(BaseModel):
+    model_version: str
 
 
 class NurseCreateInput(BaseModel):
@@ -518,70 +559,13 @@ def get_model_path(filename: str) -> Path:
 
     return PROJECT_MODELS_DIR / filename
 
-#MODEL_PATH = get_model_path("triage_xgboost_balanced.pkl")
-#DEFAULT_MODEL_PATH = get_model_path("triage_xgboost.pkl")
-
-#if os.path.exists(MODEL_PATH):
-    model = joblib.load(MODEL_PATH)
-    print("Retrained model loaded.")
-#else:
-    #model = joblib.load(DEFAULT_MODEL_PATH)
-    #try:
-        #model = joblib.load(DEFAULT_MODEL_PATH)
-        #MODEL_AVAILABLE = True
-    #except Exception as e:
-       #print(f"Model load failed: {e}")
-        #model = None
-        #MODEL_AVAILABLE = False
-    #print("Default model loaded.")
-
-
-
-#label_encoder = joblib.load(get_model_path("esi_label_encoder.pkl"))
-
-#initialize_shap(model)
-#if SHAP_AVAILABLE:
-    #initialize_shap()
-
-MODEL_PATH = get_model_path("triage_xgboost_balanced.pkl")
-DEFAULT_MODEL_PATH = get_model_path("triage_xgboost.pkl")
-LABEL_ENCODER_PATH = get_model_path("esi_label_encoder.pkl")
-
+# Model objects are intentionally not loaded during import. On Render Free Tier,
+# import-time model loading slows cold starts and can exceed memory. Prediction
+# requests lazy-load and cache the model; failures use safe rule-based fallback.
+model = None
+label_encoder = None
 MODEL_AVAILABLE = False
 LABEL_ENCODER_AVAILABLE = False
-
-try:
-    if os.path.exists(MODEL_PATH):
-        model = joblib.load(MODEL_PATH)
-        MODEL_AVAILABLE = True
-        print("Balanced model loaded.")
-    elif os.path.exists(DEFAULT_MODEL_PATH):
-        model = joblib.load(DEFAULT_MODEL_PATH)
-        MODEL_AVAILABLE = True
-        print("Default model loaded.")
-    else:
-        model = None
-        print("No model file found. Running backend without ML model.")
-except Exception as e:
-    print(f"Model load failed: {e}")
-    model = None
-    MODEL_AVAILABLE = False
-
-try:
-    if os.path.exists(LABEL_ENCODER_PATH):
-        label_encoder = joblib.load(LABEL_ENCODER_PATH)
-        LABEL_ENCODER_AVAILABLE = True
-        print("Label encoder loaded.")
-    else:
-        label_encoder = None
-        print("No label encoder file found. Running without label encoder.")
-except Exception as e:
-    print(f"Label encoder load failed: {e}")
-    label_encoder = None
-    LABEL_ENCODER_AVAILABLE = False
-
-if SHAP_AVAILABLE and MODEL_AVAILABLE:
-    initialize_shap()
 
 
 # -----------------------------
@@ -610,7 +594,111 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+def api_error(message: str, code: str, status_code: int = 500, detail: str | None = None) -> JSONResponse:
+    payload = {"status": "error", "message": message, "code": code}
+    if detail:
+        payload["detail"] = detail
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    detail = exc.detail if isinstance(exc.detail, str) else None
+    message = detail or "Request could not be completed."
+    code = "HTTP_ERROR"
+    if exc.status_code == 401:
+        code = "UNAUTHORIZED"
+    elif exc.status_code == 403:
+        code = "FORBIDDEN"
+    elif exc.status_code == 404:
+        code = "NOT_FOUND"
+    elif exc.status_code >= 500:
+        code = "SERVER_ERROR"
+    return api_error(message=message, code=code, status_code=exc.status_code, detail=detail)
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    error_logger().exception("Unhandled backend error on %s %s", request.method, request.url.path)
+    db = SessionLocal()
+    try:
+        create_incident(
+            db,
+            incident_type="backend_error",
+            severity="critical",
+            message="Backend request failed. Clinician review required for affected AI-supported triage workflows.",
+            related_service=request.url.path,
+        )
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+    return api_error(
+        message="The service hit an unexpected error. Please retry or contact an administrator.",
+        code="INTERNAL_SERVER_ERROR",
+        status_code=500,
+    )
+
+
+@app.middleware("http")
+async def reliability_middleware(request: Request, call_next):
+    started_at = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
+        record_request(request.url.path, request.method, status_code, latency_ms)
+        if latency_ms >= 3000:
+            db = SessionLocal()
+            try:
+                create_incident(
+                    db,
+                    incident_type="high_latency",
+                    severity="warning",
+                    message=f"High API latency detected: {latency_ms} ms.",
+                    related_service=request.url.path,
+                )
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()
+        if status_code >= 500:
+            error_logger().error("Request failed: %s %s status=%s latency_ms=%s", request.method, request.url.path, status_code, latency_ms)
+        else:
+            app_logger().info("Request completed: %s %s status=%s latency_ms=%s", request.method, request.url.path, status_code, latency_ms)
+
 Base.metadata.create_all(bind=engine)
+
+
+def current_model_version() -> str:
+    db = SessionLocal()
+    try:
+        return get_current_production_model(db)["model_version"]
+    except Exception:
+        return "esi_model_v1"
+    finally:
+        db.close()
+
+
+def ensure_mlops_bootstrap():
+    db = SessionLocal()
+    try:
+        record = ensure_bootstrap_registry(db)
+        # Avoid regenerating local files on every Render cold start. Local files
+        # are fallback artifacts; PostgreSQL is the persistent source of truth.
+        if not db.query(MLModelCard).filter(MLModelCard.model_version == record["model_version"]).first():
+            save_model_card(db, record, created_by="bootstrap")
+    except Exception as exc:
+        print(f"[WARNING] MLOps bootstrap skipped: {exc}")
+    finally:
+        db.close()
+
+
+ensure_mlops_bootstrap()
 
 
 def ensure_app_user_columns():
@@ -869,6 +957,13 @@ ensure_default_nurse_records()
 if DL_AVAILABLE:
     app.include_router(v2_router)
 app.include_router(assignment_router, prefix="/api/assignments", tags=["Assignments"])
+app.include_router(build_self_healing_router(require_role, lambda: model_status()["loaded"]))
+app.include_router(build_command_center_router(require_role, lambda: model_status()["loaded"], lambda: model_status()["label_encoder_loaded"]))
+app.include_router(build_patient_timeline_router(require_role))
+app.include_router(build_alert_router(require_role))
+app.include_router(build_model_governance_router(require_role))
+app.include_router(build_render_status_router(require_role))
+app.include_router(build_backup_router(require_role))
 
 
 # -----------------------------
@@ -905,28 +1000,198 @@ def home():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    db = SessionLocal()
+    try:
+        status_info = model_status()
+        summary = health_summary(db, model_loaded=status_info["loaded"] or status_info["model_path_exists"], label_encoder_loaded=status_info["label_encoder_loaded"])
+        summary["current_model_version"] = summary["model_version"]
+        summary["render_environment_detected"] = summary["render_environment"]
+        summary["api_base_url"] = os.getenv("API_URL") or os.getenv("RENDER_EXTERNAL_URL")
+        summary.update(
+            {
+                "backend": "running",
+                "authentication": "enabled",
+                "rbac": "enabled",
+                "shap": "enabled",
+                "human_feedback": "enabled",
+                "nlp_symptom_extraction": "enabled",
+                "computer_vision": "enabled",
+                "deep_learning_image": "enabled",
+                "multimodal_triage": "enabled",
+                "pdf_reports": "enabled",
+                "patient_risk_watchlist": "enabled",
+                "model_retraining": "enabled",
+                "company_health_dashboard": "enabled",
+                "mlops_monitoring": "enabled",
+                "platform_reliability": "enabled",
+            }
+        )
+        return summary
+    finally:
+        db.close()
 
-@app.get("/health")
-def health_check():
-    return {
-        "status": "ok",
-        "model_loaded": model is not None,
-        "label_encoder_loaded": label_encoder is not None,
-        "database": "connected",
-        "authentication": "enabled",
-        "rbac": "enabled",
-        "shap": "enabled",
-        "human_feedback": "enabled",
-        "nlp_symptom_extraction": "enabled",
-        "computer_vision": "enabled",
-        "deep_learning_image": "enabled",
-        "multimodal_triage": "enabled",
-        "pdf_reports": "enabled",
-        "patient_risk_watchlist": "enabled",
-        "model_retraining": "enabled",
-        "company_health_dashboard": "enabled"
-    }
+
+@app.get("/api/v1/health")
+def api_v1_health():
+    return health_check()
+
+
+@app.get("/api/platform/health")
+def api_platform_health(
+    current_user: dict = Depends(require_role(["doctor", "admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    status_info = model_status()
+    return health_summary(db, model_loaded=status_info["loaded"] or status_info["model_path_exists"], label_encoder_loaded=status_info["label_encoder_loaded"])
+
+
+@app.get("/api/platform/status")
+def api_platform_status(
+    current_user: dict = Depends(require_role(["doctor", "admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    status_info = model_status()
+    status = platform_status(db, model_loaded=status_info["loaded"] or status_info["model_path_exists"], label_encoder_loaded=status_info["label_encoder_loaded"])
+    if current_user["role"] == "doctor":
+        status["active_incidents"] = [
+            item for item in status["active_incidents"] if item["severity"] in {"warning", "critical"}
+        ]
+    return status
+
+
+@app.get("/api/platform/incidents")
+def api_platform_incidents(
+    include_resolved: bool = False,
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    return {"incidents": list_incidents(db, include_resolved=include_resolved)}
+
+
+@app.get("/api/platform/ai-reliability")
+def api_platform_ai_reliability(
+    current_user: dict = Depends(require_role(["doctor", "admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    return ai_reliability_status(db)
+
+
+@app.get("/api/platform/deployment-validation")
+def api_platform_deployment_validation(
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+):
+    return validate_runtime_config()
+
+
+@app.get("/api/v1/platform/status")
+def api_v1_platform_status(
+    current_user: dict = Depends(require_role(["doctor", "admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    status_info = model_status()
+    return platform_status(db, model_loaded=status_info["loaded"] or status_info["model_path_exists"], label_encoder_loaded=status_info["label_encoder_loaded"])
+
+
+@app.get("/api/v1/mlops/model-health")
+def api_v1_mlops_model_health(
+    current_user: dict = Depends(require_role(["doctor", "admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    return model_health(db)
+
+
+@app.get("/api/mlops/model-health")
+def api_mlops_model_health(
+    current_user: dict = Depends(require_role(["doctor", "admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    return model_health(db)
+
+
+@app.get("/api/mlops/drift-report")
+def api_mlops_drift_report(
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    version = get_current_production_model(db)["model_version"]
+    return latest_drift_report(db, version)
+
+
+@app.get("/api/mlops/model-registry")
+def api_mlops_model_registry(
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    records = list_models(db)
+    write_registry_snapshot(records)
+    return {"models": records}
+
+
+@app.post("/api/mlops/retrain")
+def api_mlops_retrain(
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    return run_retraining(db, requested_by=current_user["username"])
+
+
+@app.post("/api/mlops/promote-model")
+def api_mlops_promote_model(
+    payload: PromoteModelInput,
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    try:
+        promoted = promote_model(db, payload.model_version, deployed_by=current_user["username"])
+        save_model_card(db, promoted, created_by=current_user["username"])
+        return {
+            "status": "success",
+            "model": promoted,
+            "message": "Model promoted to production metadata. Restart the Render backend or redeploy if loading a new artifact is required.",
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/mlops/model-card/{version}")
+def api_mlops_model_card(
+    version: str,
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    card = get_model_card(db, version)
+    if card:
+        return card
+    record = get_current_production_model(db) if version == "production" else None
+    if record:
+        return save_model_card(db, record, created_by=current_user["username"])
+    raise HTTPException(status_code=404, detail="Model card not found")
+
+
+@app.get("/api/mlops/prediction-monitoring")
+def api_mlops_prediction_monitoring(
+    limit: int = 100,
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    return {"predictions": get_prediction_monitoring(db, limit=min(max(limit, 1), 500))}
+
+
+@app.get("/api/mlops/deployment-status")
+def api_mlops_deployment_status(
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    return validate_render_deployment(db)
+
+
+@app.post("/api/mlops/drift-report/refresh")
+def api_mlops_refresh_drift_report(
+    current_user: dict = Depends(require_role(["admin", "super_admin"])),
+    db=Depends(get_db),
+):
+    version = get_current_production_model(db)["model_version"]
+    return compute_drift_report(db, version)
 
 
 # -----------------------------
@@ -1599,34 +1864,66 @@ def analyze_image(
 # PREDICTION
 # -----------------------------
 
+@app.post("/api/v1/predict")
 @app.post("/predict")
 def predict(
     patient: PatientInput,
     current_user: dict = Depends(require_role(["patient", "doctor", "nurse", "admin", "super_admin"]))
 ):
+    started_at = time.perf_counter()
     patient_dict = patient.dict()
     model_input_dict, input_df = prepare_model_input(patient_dict)
+    model_version = current_model_version()
+    bundle = load_model_bundle()
+    local_model = bundle.get("model")
+    local_label_encoder = bundle.get("label_encoder")
 
-    #try:
-        #raw_prediction = model.predict(input_df)
-    #if not MODEL_AVAILABLE:
-    if not MODEL_AVAILABLE or not LABEL_ENCODER_AVAILABLE:
+    # If Render cannot load the model quickly or artifacts are missing, keep the
+    # API alive and use transparent fallback triage. Clinician review is required.
+    if not bundle.get("available"):
+        incident_db = SessionLocal()
+        try:
+            create_incident(
+                incident_db,
+                incident_type="model_error",
+                severity="critical",
+                message="Model or label encoder is unavailable. AI-supported triage fallback requires clinician review.",
+                related_service="/predict",
+            )
+        except Exception:
+            incident_db.rollback()
+        finally:
+            incident_db.close()
+        fallback = fallback_rule_based_triage(model_input_dict)
         return {
-            "error": "Model not available in deployment"
-    }
+            "status": "success",
+            "prediction_source": "fallback_rules",
+            "user": current_user["username"],
+            "role": current_user["role"],
+            "prediction_id": None,
+            "log_id": None,
+            "ml_prediction": fallback["ml_prediction"],
+            "final_prediction": fallback["final_prediction"],
+            "confidence": fallback["confidence"],
+            "safety_reasons": fallback["safety_reasons"],
+            "clinical_explanations": fallback["clinical_explanations"],
+            "guardrails": fallback["guardrails"],
+            "message": "Fallback rule-based triage used. Clinician review required.",
+            "log_status": "Database prediction log skipped because ML model is unavailable",
+        }
 
     try:
-        raw_prediction = model.predict(input_df)
+        raw_prediction = local_model.predict(input_df)
 
         if len(raw_prediction.shape) > 1:
             ml_prediction_encoded = int(raw_prediction.argmax(axis=1)[0])
         else:
             ml_prediction_encoded = int(raw_prediction[0])
 
-        ml_prediction = label_encoder.inverse_transform([ml_prediction_encoded])[0]
+        ml_prediction = local_label_encoder.inverse_transform([ml_prediction_encoded])[0]
     
-        probabilities = model.predict_proba(input_df)[0]
-        classes = label_encoder.inverse_transform(model.classes_)
+        probabilities = local_model.predict_proba(input_df)[0]
+        classes = local_label_encoder.inverse_transform(local_model.classes_)
 
         probability_dict = {
             str(classes[i]): float(probabilities[i])
@@ -1636,10 +1933,51 @@ def predict(
         confidence = float(max(probabilities))
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Model prediction failed: {str(e)}"
-        )
+        clear_model_cache()
+        failure_db = SessionLocal()
+        try:
+            create_incident(
+                failure_db,
+                incident_type="prediction_failure",
+                severity="critical",
+                message="Prediction failed. Clinician review required; AI-supported triage only.",
+                related_service="/predict",
+            )
+            log_prediction_monitoring(
+                failure_db,
+                prediction_id=None,
+                patient_id=None,
+                model_version=model_version,
+                input_features=model_input_dict,
+                predicted_esi=None,
+                confidence=None,
+                safety_rule_triggered=False,
+                final_esi=None,
+                latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
+                failed=True,
+                error_message=str(e),
+            )
+        except Exception:
+            pass
+        finally:
+            failure_db.close()
+        fallback = fallback_rule_based_triage(model_input_dict)
+        return {
+            "status": "success",
+            "prediction_source": "fallback_rules",
+            "user": current_user["username"],
+            "role": current_user["role"],
+            "prediction_id": None,
+            "log_id": None,
+            "ml_prediction": fallback["ml_prediction"],
+            "final_prediction": fallback["final_prediction"],
+            "confidence": fallback["confidence"],
+            "safety_reasons": fallback["safety_reasons"],
+            "clinical_explanations": fallback["clinical_explanations"],
+            "guardrails": fallback["guardrails"],
+            "message": "Fallback rule-based triage used. Clinician review required.",
+            "log_status": "Fallback prediction returned after ML prediction failure",
+        }
 
     final_prediction, reasons = apply_safety_rules(
         model_input_dict,
@@ -1669,6 +2007,25 @@ def predict(
             status_code=500,
             detail="Prediction completed but failed to save in PostgreSQL"
         )
+
+    monitoring_db = SessionLocal()
+    try:
+        log_prediction_monitoring(
+            monitoring_db,
+            prediction_id=log_id,
+            patient_id=str(patient_dict.get("patient_id")) if patient_dict.get("patient_id") else None,
+            model_version=model_version,
+            input_features=model_input_dict,
+            predicted_esi=str(ml_prediction),
+            confidence=confidence,
+            safety_rule_triggered=bool(reasons),
+            final_esi=str(final_prediction),
+            latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
+        )
+    except Exception as monitor_err:
+        print(f"[WARNING] Prediction monitoring fallback used or failed: {monitor_err}")
+    finally:
+        monitoring_db.close()
 
     audit_db = SessionLocal()
     try:
@@ -1716,6 +2073,7 @@ def predict(
         "safety_reasons": reasons,
         "clinical_explanations": explanations,
         "probabilities": probability_dict,
+        "model_version": model_version,
         "problem_description_saved": patient.problem_description is not None,
         "nlp_saved": patient.llm_ready_text is not None,
         "cv_saved": patient.cv_analysis is not None,
@@ -1741,24 +2099,44 @@ def shap_explain(
     """
     patient_dict = patient.dict()
     model_input_dict, input_df = prepare_model_input(patient_dict)
+    bundle = load_model_bundle()
+    local_model = bundle.get("model")
+    local_label_encoder = bundle.get("label_encoder")
+
+    if not bundle.get("available"):
+        # SHAP is optional on Render Free Tier. When unavailable, return a simple
+        # deterministic explanation so the UI stays useful without heavy memory use.
+        return {
+            "status": "success",
+            "requested_by": current_user["username"],
+            "role": current_user["role"],
+            "prediction": "fallback_rules",
+            "confidence": None,
+            "explanation_source": "lightweight_fallback",
+            "message": "SHAP unavailable. Simple feature contribution explanation used. Clinician review required.",
+            "feature_importance": [
+                {"feature": column, "value": to_python_value(input_df.iloc[0].get(column)), "shap_value": 0.0, "absolute_importance": 0.0, "direction": "requires clinician review"}
+                for column in list(input_df.columns)[:10]
+            ],
+        }
 
     try:
-        raw_prediction = model.predict(input_df)
+        raw_prediction = local_model.predict(input_df)
 
         if len(raw_prediction.shape) > 1:
             prediction_encoded = int(raw_prediction.argmax(axis=1)[0])
         else:
             prediction_encoded = int(raw_prediction[0])
 
-        prediction = label_encoder.inverse_transform([prediction_encoded])[0]
+        prediction = local_label_encoder.inverse_transform([prediction_encoded])[0]
 
-        probabilities = model.predict_proba(input_df)[0]
+        probabilities = local_model.predict_proba(input_df)[0]
         confidence = float(max(probabilities))
 
         feature_names = list(input_df.columns)
 
-        if hasattr(model, "feature_importances_"):
-            raw_importances = list(model.feature_importances_)
+        if hasattr(local_model, "feature_importances_"):
+            raw_importances = list(local_model.feature_importances_)
         else:
             raw_importances = [0.0 for _ in feature_names]
 
@@ -1792,10 +2170,20 @@ def shap_explain(
         }
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"SHAP explanation failed: {str(e)}"
-        )
+        return {
+            "status": "success",
+            "requested_by": current_user["username"],
+            "role": current_user["role"],
+            "prediction": "fallback_explanation",
+            "confidence": None,
+            "explanation_source": "lightweight_fallback",
+            "message": "SHAP failed safely. Simple explanation fallback used. Clinician review required.",
+            "detail": str(e),
+            "feature_importance": [
+                {"feature": column, "value": to_python_value(input_df.iloc[0].get(column)), "shap_value": 0.0, "absolute_importance": 0.0, "direction": "requires clinician review"}
+                for column in list(input_df.columns)[:10]
+            ],
+        }
 
 
 @app.get("/shap/image")
@@ -1806,10 +2194,12 @@ def shap_image(
     Returns a simple PNG feature-importance chart for the SHAP page.
     """
     try:
-        if not hasattr(model, "feature_importances_"):
+        bundle = load_model_bundle()
+        local_model = bundle.get("model")
+        if not bundle.get("available") or not hasattr(local_model, "feature_importances_"):
             raise HTTPException(
                 status_code=404,
-                detail="Feature importance image is not available for this model."
+                detail="Feature importance image is not available. Explanation fallback is active."
             )
 
         feature_names = [
@@ -1821,7 +2211,7 @@ def shap_image(
             "cc_syncope", "cc_weakness"
         ]
 
-        importances = list(model.feature_importances_)
+        importances = list(local_model.feature_importances_)
         rows = list(zip(feature_names[:len(importances)], importances))
         rows = sorted(rows, key=lambda x: x[1], reverse=True)[:10]
 

@@ -1466,3 +1466,541 @@ If the frontend shows a connection error:
 2. Visit `http://127.0.0.1:8000/health` in your browser. It should return `{"status": "ok"}`.
 3. Make sure `API_URL` is set to `http://127.0.0.1:8000` (not `localhost` without port).
 4. On Windows, use `python -m uvicorn` instead of `uvicorn` directly if the command is not found.
+
+## MLOps Maintenance Plan for Render Deployment
+
+This project now includes a production-style MLOps layer for educational AI-supported triage. The model output should be treated as possible risk only, and clinician review is required. The system does not provide a final medical diagnosis.
+
+### Render Commands
+
+Backend Render Build Command:
+
+```bash
+pip install -r requirements.txt
+```
+
+Backend Render Start Command:
+
+```bash
+python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+```
+
+Frontend Render Build Command:
+
+```bash
+pip install -r requirements.txt
+```
+
+Frontend Render Start Command:
+
+```bash
+streamlit run frontend/app.py --server.port $PORT --server.address 0.0.0.0
+```
+
+Local commands:
+
+```bash
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+streamlit run frontend/app.py
+pytest
+alembic upgrade head
+```
+
+### Required Environment Variables
+
+Backend:
+
+- `DATABASE_URL`
+- `SECRET_KEY`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `CORS_ORIGINS`
+- `RENDER=true`
+
+Frontend:
+
+- `API_URL=https://YOUR-BACKEND-RENDER-URL.onrender.com`
+- `RENDER=true`
+
+Set `CORS_ORIGINS` on the backend to include the Render frontend URL, for example:
+
+```bash
+CORS_ORIGINS=https://YOUR-FRONTEND-RENDER-URL.onrender.com,http://localhost:8501,http://127.0.0.1:8501
+```
+
+### Model Monitoring
+
+The backend logs prediction monitoring data to PostgreSQL through `ml_prediction_monitoring`. Each record tracks prediction ID, model version, input features, predicted ESI, confidence, ICU risk, readmission risk, safety-rule status, clinician override status, final ESI, timestamp, and latency. Local CSV fallback is written to `logs/prediction_monitoring.csv` only for development or database failure.
+
+Check model health:
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" https://YOUR-BACKEND-RENDER-URL.onrender.com/api/mlops/model-health
+```
+
+A model is considered unhealthy when drift becomes critical, failed predictions occur, low confidence rises, latency degrades, or clinician override rate increases.
+
+### Data Drift
+
+The drift monitor compares live prediction input with historical baseline data for age, heart rate, respiratory rate, oxygen saturation, temperature, systolic BP, diastolic BP, chest pain frequency, shortness-of-breath frequency, ICU risk frequency, and ESI distribution. Drift status is `stable`, `warning`, or `critical`.
+
+Drift reports are stored in PostgreSQL through `ml_drift_reports`. Local fallback files are `reports/drift_report.json` and `reports/drift_report.csv`.
+
+### Model Registry
+
+The model registry stores every model version in PostgreSQL through `ml_model_registry`, including model path, feature columns path, training dataset, training date, metrics, status, deployment time, and deployer. Artifact copies are written under `models/registry/` using names such as `esi_model_v1.pkl` and `esi_model_v2.pkl`.
+
+Render filesystem warning: Render local disk can be ephemeral. PostgreSQL is the source of truth for critical registry metadata, monitoring logs, drift reports, and model card text. Local model artifacts are useful fallback files, but do not rely on local CSV or JSON files for production persistence.
+
+### Retraining Workflow
+
+Retraining is exposed at:
+
+```bash
+POST /api/mlops/retrain
+```
+
+Only `admin` and `super_admin` can call it. The safe workflow loads reviewed prediction data, validates required feature columns, trains a candidate model, evaluates metrics, compares against the production model, saves candidate metadata even if validation fails, and generates a model card when training succeeds.
+
+A candidate can move to staging only if `f1_score` improves or critical ESI 1/2 recall improves, and there is no major validation failure. It is not auto-deployed.
+
+Promote safely:
+
+```bash
+POST /api/mlops/promote-model
+```
+
+Promotion updates registry metadata to production. Restart or redeploy the Render backend if the new artifact must be loaded by the running service.
+
+### Model Card
+
+Model cards are generated as Markdown under `reports/model_cards/esi_model_vX.md` and stored in PostgreSQL through `ml_model_cards`. Each card documents purpose, training data, features, metrics, limitations, safety disclaimer, bias considerations, clinical limitations, monitoring plan, retraining trigger, and Render deployment notes.
+
+### API Endpoints
+
+- `GET /api/mlops/model-health`: doctor/admin/super_admin read-only health.
+- `GET /api/mlops/drift-report`: admin/super_admin.
+- `GET /api/mlops/model-registry`: admin/super_admin.
+- `POST /api/mlops/retrain`: admin/super_admin.
+- `POST /api/mlops/promote-model`: admin/super_admin.
+- `GET /api/mlops/model-card/{version}`: admin/super_admin.
+- `GET /api/mlops/prediction-monitoring`: admin/super_admin.
+- `GET /api/mlops/deployment-status`: admin/super_admin.
+
+Nurses and patients do not have MLOps access.
+
+### Streamlit Dashboard
+
+Admins and super admins see **MLOps Monitoring** in the sidebar. Doctors see read-only **AI Model Health**. The dashboard uses `API_URL`, supports Render backend URLs, and displays model health, drift, prediction volume, average confidence, override rate, latency, ESI distribution, registry data, retraining controls, model cards, and Render deployment status.
+
+### CI/CD for Render
+
+GitHub Actions in `.github/workflows/ci.yml` runs dependency install, import checks, pytest, FastAPI startup checks, model file checks, fallback model checks, and Render environment validation. No Docker, docker-compose, Kubernetes, or container workflow is required.
+
+## AI Platform Engineering & Reliability
+
+EmergeAI now includes an AI platform reliability layer for smoother Render operation. It monitors backend availability, database connectivity, model loading, API latency, failed requests, failed predictions, queue count, active nurses, Render environment detection, and AI reliability signals. This remains educational/demo healthcare AI only: outputs describe possible risk, AI-supported triage only, and clinician review required.
+
+### Platform Modules
+
+- `src/platform/reliability_monitor.py`: request latency, uptime, failed request window, `logs/app.log`, and `logs/error.log`.
+- `src/platform/system_health.py`: database, model, queue, nurse, prediction logging, and Render health summary.
+- `src/platform/incident_manager.py`: database-backed platform incidents.
+- `src/platform/service_status.py`: combines system health, AI reliability, incidents, and runtime validation.
+- `src/platform/runtime_config.py`: Render-aware environment validation.
+- `src/platform/ai_reliability.py`: low-confidence, possible under-triage, override rate, ESI 1/2 cases, failed prediction, missing feature, and drift checks.
+
+### Health And Status APIs
+
+- `GET /health`: public Render health check.
+- `GET /api/platform/health`: doctor/admin/super_admin.
+- `GET /api/platform/status`: doctor/admin/super_admin.
+- `GET /api/platform/incidents`: admin/super_admin.
+- `GET /api/platform/ai-reliability`: doctor/admin/super_admin.
+- `GET /api/platform/deployment-validation`: admin/super_admin.
+
+Errors follow this JSON shape:
+
+```json
+{
+  "status": "error",
+  "message": "User friendly message",
+  "detail": "Technical detail only if safe",
+  "code": "ERROR_CODE"
+}
+```
+
+### Incident Management
+
+Platform incidents are stored in PostgreSQL in `platform_incidents` with type, severity, message, service, status, created time, resolved time, and resolver. Supported incident types include `backend_error`, `database_error`, `model_error`, `prediction_failure`, `high_latency`, `drift_warning`, `override_rate_warning`, and `queue_assignment_failure`.
+
+Severity levels:
+
+- `healthy`
+- `warning`
+- `critical`
+
+Incidents are created for unhandled backend errors, high latency, model unavailability, and prediction failures. Admins can review them from the **Platform Health** page.
+
+### AI Reliability Checks
+
+The AI reliability layer watches:
+
+- low confidence predictions
+- possible dangerous under-triage patterns
+- doctor override rate
+- ESI 1/2 case volume
+- failed predictions
+- failed SHAP fallback status
+- missing feature payloads
+- MLOps drift warning/critical status
+
+The UI and API use safe language only: possible risk, clinician review required, AI-supported triage only.
+
+### Platform Dashboard
+
+Admins and super admins see **Platform Health** in the sidebar. Doctors see read-only **System Status**. Nurses and patients have no platform access.
+
+The dashboard shows backend status, database status, model status, model version, API latency, prediction failures, active incidents, queue count, active nurses, Render environment status, AI reliability status, and Render deployment validation.
+
+### Render Commands
+
+Backend Render Start Command:
+
+```bash
+python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+```
+
+Frontend Render Start Command:
+
+```bash
+streamlit run frontend/app.py --server.port $PORT --server.address 0.0.0.0
+```
+
+Local backend:
+
+```bash
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Local frontend:
+
+```bash
+streamlit run frontend/app.py
+```
+
+Tests:
+
+```bash
+pytest
+```
+
+### Required Render Environment Variables
+
+Backend:
+
+- `RENDER=true`
+- `DATABASE_URL`
+- `SECRET_KEY`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+- `CORS_ORIGINS`
+- `MODEL_PATH=models/triage_xgboost_balanced.pkl`
+- `FEATURE_COLUMNS_PATH=models/emergency_feature_columns.pkl`
+
+Frontend:
+
+- `RENDER=true`
+- `API_URL=https://YOUR-BACKEND-RENDER-URL.onrender.com`
+
+Troubleshooting frontend-backend connection:
+
+1. Open `https://YOUR-BACKEND-RENDER-URL.onrender.com/health`.
+2. Confirm `database` is `connected`.
+3. Confirm `model_loaded` is `true` or review model fallback.
+4. Confirm frontend `API_URL` points to the backend Render service.
+5. Confirm backend `CORS_ORIGINS` includes the frontend Render URL.
+6. Open **Platform Health** as admin or **System Status** as doctor.
+
+### Test Platform Health
+
+Local:
+
+```bash
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+curl http://127.0.0.1:8000/health
+pytest tests/test_platform_health.py tests/test_ai_reliability.py tests/test_incident_manager.py tests/test_api_error_format.py
+```
+
+Render:
+
+```bash
+curl https://YOUR-BACKEND-RENDER-URL.onrender.com/health
+```
+
+Authenticated platform endpoints require a doctor, admin, or super admin bearer token.
+
+## Self-Healing & Auto-Recovery System
+
+EmergeAI includes a self-healing layer for Render-hosted FastAPI and Streamlit operation. It detects backend health, database connectivity, model availability, prediction failures, SHAP/upload failures, queue and nurse assignment issues, frontend connection problems, Render configuration gaps, high latency, repeated API errors, drift warnings, and override-rate warnings.
+
+Safe auto-recovery can:
+
+- Roll back and reconnect a failed database session.
+- Mark rule-based triage fallback active when the ML model is missing or prediction fails.
+- Keep patients in the waiting queue when nurse auto-assignment fails.
+- Continue triage when OCR/image analysis fails by using metadata, text, vitals, and clinician review.
+- Return friendly JSON errors instead of raw stack traces.
+- Show degraded mode rather than crashing the Streamlit UI.
+
+Manual action is required for unsafe issues:
+
+- Deleting or changing patient data.
+- Changing doctor notes or clinician final decisions.
+- Approving users.
+- Overriding clinician feedback.
+- Permanently replacing the production model.
+- Hiding critical incidents.
+- Fixing missing Render secrets or incorrect service URLs.
+
+Self-healing APIs:
+
+- `GET /api/platform/self-healing/status`
+- `POST /api/platform/self-healing/run-checks`
+- `POST /api/platform/self-healing/recover`
+- `GET /api/platform/self-healing/incidents`
+- `POST /api/platform/self-healing/resolve-incident/{incident_id}`
+
+Admins and super admins have full access. Doctors have read-only status access. Nurses and patients have no self-healing access.
+
+Fallback behavior:
+
+If the ML model fails, the backend uses safe rule-based ESI-style fallback and returns:
+
+```text
+Fallback rule-based triage used. Clinician review required.
+```
+
+The fallback checks low oxygen, severe chest pain with high heart rate, abnormal respiratory rate, fever with low oxygen, and stable vitals. It never provides a final medical diagnosis.
+
+Degraded mode:
+
+When Render, database, model, queue, or API checks fail, the system reports `healthy`, `degraded`, `critical`, or `manual_required`. Render services are not restarted automatically. Operators see recommended fixes in the dashboard.
+
+Test self-healing locally:
+
+```bash
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+pytest tests/test_self_healing.py tests/test_recovery_actions.py tests/test_fallback_triage.py
+```
+
+## Production AI Platform Improvements
+
+### Admin Command Center
+
+The **Admin Command Center** summarizes active queue count, critical patients, active nurses, nurse workload, failed predictions, active incidents, model health, drift status, backend health, database health, and Render deployment status.
+
+Route:
+
+```text
+GET /api/command-center/summary
+```
+
+### Patient Journey Timeline
+
+The patient timeline tracks registration, approval, prediction, queue entry, nurse assignment, triage started, upload added, sent to doctor, doctor review, PDF generated, and completion.
+
+Routes:
+
+```text
+GET /api/patient-timeline/{patient_id}
+POST /api/patient-timeline/event
+```
+
+### Platform Alerts
+
+Alerts cover model failure, critical drift, backend degraded, database error, stuck queue, nurse assignment failed, high override rate, failed predictions, Render config issues, and self-healing recovery failure.
+
+Routes:
+
+```text
+GET /api/platform/alerts
+POST /api/platform/alerts/create
+POST /api/platform/alerts/{alert_id}/resolve
+```
+
+### Model Governance
+
+The model governance panel shows production model version, model status, training date, metrics, promotion history, retraining history, model card, limitations, and safety disclaimer.
+
+Routes:
+
+```text
+GET /api/mlops/governance
+GET /api/mlops/governance/model-card/{version}
+```
+
+### Clinical Guardrails
+
+Clinical guardrails flag possible risk for low oxygen, chest pain with high heart rate, abnormal respiratory rate, fever with reduced oxygen, low confidence predictions, and fallback predictions. Responses include whether a guardrail was triggered, severity, safe message, and recommended action. Wording remains: possible risk, clinician review required, AI-supported triage only.
+
+### Render Status
+
+The Render status page shows backend URL, frontend URL, API URL, DATABASE_URL configured yes/no, SECRET_KEY configured yes/no, CORS configured yes/no, model path validity, feature columns path validity, and Render environment detection.
+
+Route:
+
+```text
+GET /api/platform/render-status
+```
+
+### Backup And Export
+
+Admins and super admins can export safe metadata for users, predictions, clinical feedback, nurse assignments, queue records, audit logs, incident logs, alert logs, and model registry metadata.
+
+Routes:
+
+```text
+GET /api/platform/backup/metadata
+POST /api/platform/backup/export
+```
+
+The export excludes passwords, password hashes, `SECRET_KEY`, `DATABASE_URL`, SMTP passwords, and API keys.
+
+### API Versioning
+
+Versioned aliases were added while preserving existing routes:
+
+```text
+GET /api/v1/health
+POST /api/v1/predict
+GET /api/v1/mlops/model-health
+GET /api/v1/platform/status
+```
+
+### Render Deployment Notes
+
+Backend Render Start Command:
+
+```bash
+python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+```
+
+Frontend Render Start Command:
+
+```bash
+streamlit run frontend/app.py --server.port $PORT --server.address 0.0.0.0
+```
+
+Required Render environment variables:
+
+- `DATABASE_URL`
+- `SECRET_KEY`
+- `CORS_ORIGINS`
+- `API_URL`
+- `RENDER=true`
+- `MODEL_PATH=models/triage_xgboost_balanced.pkl`
+- `FEATURE_COLUMNS_PATH=models/emergency_feature_columns.pkl`
+
+Full platform test command:
+
+```bash
+pytest
+```
+
+## Render Free Tier Optimization
+
+This project is optimized to run as separate Render Free Tier web services:
+
+- Backend: FastAPI
+- Frontend: Streamlit
+- Database: PostgreSQL
+
+Render Free Tier services may sleep after inactivity. The first request after sleep can be slow while the backend wakes up and lazy-loads the model. The frontend API client retries requests and shows friendly messages such as:
+
+- `Backend is temporarily unavailable.`
+- `Render free tier may be waking up. Try again in a few seconds.`
+- `System is running in degraded mode.`
+- `Prediction fallback is active. Clinician review required.`
+
+### Lightweight Dependency Policy
+
+Heavy libraries are optional and should not be required for startup on Render Free Tier:
+
+- PyTorch/Torchvision image AI is optional. If unavailable, deep-learning image routes are disabled and the app continues with vitals/text triage.
+- SHAP is optional. If unavailable or too heavy, the backend returns a lightweight feature-importance explanation fallback.
+- OCR is optional. If `pytesseract` or the system Tesseract binary is unavailable, upload analysis continues with metadata-only image assessment.
+- Retraining does not run on startup. It must be triggered manually by an admin/super admin and may be better suited for local/offline runs.
+
+### Lazy Model Loading
+
+The XGBoost triage model is lazy-loaded only when `/predict` is called. The loaded model is cached for later requests. This reduces cold-start memory and CPU usage. If model loading fails, the backend uses rule-based ESI-style fallback:
+
+```text
+Fallback rule-based triage used. Clinician review required.
+```
+
+This fallback is AI-supported triage only and never provides a final medical diagnosis.
+
+### Filesystem Warning
+
+Render Free Tier filesystem storage can be ephemeral. Do not rely on local CSV/JSON/PDF files for production persistence. PostgreSQL should store important logs, model registry metadata, drift reports, incidents, alerts, timeline events, and prediction monitoring records. Local files under `logs/`, `reports/`, and `uploads/` are development or fallback artifacts only.
+
+### Render Environment Variables
+
+Backend:
+
+- `DATABASE_URL`
+- `SECRET_KEY`
+- `CORS_ORIGINS`
+- `RENDER=true`
+- `MODEL_PATH` optional, default `models/triage_xgboost_balanced.pkl`
+- `FEATURE_COLUMNS_PATH` optional, default `models/emergency_feature_columns.pkl`
+
+Frontend:
+
+- `API_URL=https://YOUR-BACKEND-RENDER-URL.onrender.com`
+- `RENDER=true`
+
+Do not hardcode localhost in production. Set `API_URL` in the Render frontend service.
+
+### Render Commands
+
+Backend Render Start:
+
+```bash
+python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+```
+
+Frontend Render Start:
+
+```bash
+streamlit run frontend/app.py --server.port $PORT --server.address 0.0.0.0
+```
+
+Local backend:
+
+```bash
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Local frontend:
+
+```bash
+streamlit run frontend/app.py
+```
+
+Tests:
+
+```bash
+pytest
+```
+
+### GitHub Deployment Checklist
+
+Before pushing to GitHub:
+
+- `.env` is not committed.
+- No database passwords, Render secrets, SMTP passwords, API keys, or `SECRET_KEY` values are hardcoded.
+- `.gitignore` includes `.env`, `venv/`, `__pycache__/`, `*.pyc`, `logs/`, `reports/*.pdf`, `uploads/`, and `.streamlit/secrets.toml`.
+- Large model files are intentionally tracked or otherwise available to Render.
+- Optional heavy features have safe fallback behavior.
+- `pytest` passes locally.

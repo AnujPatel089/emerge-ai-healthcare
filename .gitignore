@@ -59,6 +59,8 @@ models/backups/
 # =========================
 reports/*.pdf
 backend/reports/*.pdf
+uploads/
+.streamlit/secrets.toml
 
 # Historical uploads
 reports/historical_reports/
@@ -93,6 +95,8 @@ tmp/
 # =========================
 .pytest_cache/
 .mypy_cache/
+pytest-cache-files-*/
+test_emergeai.db*
 
 # =========================
 # Node Modules (if added later)
@@ -117,6 +121,10 @@ data/
 models/
 backend/models/
 reports/
+!reports/
+reports/*
+!reports/model_cards/
+!reports/model_cards/*.md
 shap_outputs/
 *.csv
 *.rdata

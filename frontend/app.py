@@ -24,6 +24,14 @@ from frontend.waiting_queue import render_waiting_queue
 from frontend.nurse_dashboard import render_nurse_dashboard
 from frontend.admin_dashboard import render_admin_dashboard, render_nurse_workload
 from frontend.doctor_dashboard import render_doctor_dashboard
+from frontend.mlops_dashboard import render_mlops_dashboard
+from frontend.platform_dashboard import render_platform_dashboard
+from frontend.self_healing_dashboard import render_self_healing_dashboard
+from frontend.admin_command_center import render_admin_command_center
+from frontend.patient_timeline import render_patient_timeline
+from frontend.alerts_dashboard import render_alerts_dashboard
+from frontend.model_governance import render_model_governance
+from frontend.render_status import render_render_status
 
 try:
     from audio_recorder_streamlit import audio_recorder
@@ -35,10 +43,7 @@ except Exception:
 
 #API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
-API_URL = os.getenv(
-    "API_URL",
-    "https://emerge-ai-healthcare-1.onrender.com"
-)
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 
 st.set_page_config(
     page_title="EmergeAI Healthcare",
@@ -1410,6 +1415,13 @@ for label, target in [
     ("AI Clinical Copilot", "🤖 AI Clinical Copilot"),
     ("Image Analysis", "🔬 DL Image Analysis"),
     ("Risk Watchlist", "🚨 Risk Watchlist"),
+    ("AI Model Health", "AI Model Health"),
+    ("System Status", "System Status"),
+    ("Self-Healing Status", "Self-Healing System"),
+    ("Patient Timeline", "Patient Timeline"),
+    ("Platform Alerts", "Platform Alerts"),
+    ("Model Governance", "Model Governance"),
+    ("Render Status", "Render Status"),
 ]:
     add_group_page("Doctor Tools", label, target, roles=["doctor", "admin"])
 
@@ -1441,6 +1453,14 @@ for label, target in [
     ("Company Health Dashboard", "🏥 Company Health Dashboard"),
     ("Emergency Command Center", "🚨 Emergency Command Center"),
     ("Model Retraining", "🧪 Model Retraining"),
+    ("MLOps Monitoring", "MLOps Monitoring"),
+    ("Platform Health", "Platform Health"),
+    ("Self-Healing System", "Self-Healing System"),
+    ("Command Center", "Admin Command Center"),
+    ("Patient Timeline", "Patient Timeline"),
+    ("Platform Alerts", "Platform Alerts"),
+    ("Model Governance", "Model Governance"),
+    ("Render Status", "Render Status"),
     ("Admin Monitor", "🛡️ Admin Monitor"),
 ]:
     add_group_page("Admin Command Center", label, target, roles=["super_admin", "admin"])
@@ -1694,6 +1714,58 @@ def render_patient_demo_page(page_name):
 
 if page.startswith("Patient Demo"):
     render_patient_demo_page(page)
+
+elif page in ["MLOps Monitoring", "AI Model Health"]:
+    if page == "MLOps Monitoring" and st.session_state.role not in ["admin", "super_admin"]:
+        st.error("Only admin and super admin roles can access full MLOps monitoring.")
+    elif page == "AI Model Health" and st.session_state.role not in ["doctor", "admin", "super_admin"]:
+        st.error("Only doctor and admin roles can access AI model health.")
+    else:
+        render_mlops_dashboard(st.session_state.role, auth_headers)
+
+elif page in ["Platform Health", "System Status"]:
+    if page == "Platform Health" and st.session_state.role not in ["admin", "super_admin"]:
+        st.error("Only admin and super admin roles can access platform health.")
+    elif page == "System Status" and st.session_state.role not in ["doctor", "admin", "super_admin"]:
+        st.error("Only doctor and admin roles can access system status.")
+    else:
+        render_platform_dashboard(st.session_state.role, auth_headers)
+
+elif page == "Self-Healing System":
+    if st.session_state.role not in ["doctor", "admin", "super_admin"]:
+        st.error("Only doctor and admin roles can access self-healing status.")
+    else:
+        render_self_healing_dashboard(st.session_state.role, auth_headers)
+
+elif page == "Admin Command Center":
+    if st.session_state.role not in ["doctor", "admin", "super_admin"]:
+        st.error("Only doctor and admin roles can access command center summary.")
+    else:
+        render_admin_command_center(st.session_state.role, auth_headers)
+
+elif page == "Patient Timeline":
+    if st.session_state.role not in ["nurse", "doctor", "admin", "super_admin"]:
+        st.error("Only clinical staff can access patient timeline.")
+    else:
+        render_patient_timeline(auth_headers)
+
+elif page == "Platform Alerts":
+    if st.session_state.role not in ["doctor", "admin", "super_admin"]:
+        st.error("Only doctor and admin roles can access platform alerts.")
+    else:
+        render_alerts_dashboard(st.session_state.role, auth_headers)
+
+elif page == "Model Governance":
+    if st.session_state.role not in ["doctor", "admin", "super_admin"]:
+        st.error("Only doctor and admin roles can access model governance.")
+    else:
+        render_model_governance(auth_headers)
+
+elif page == "Render Status":
+    if st.session_state.role not in ["doctor", "admin", "super_admin"]:
+        st.error("Only doctor and admin roles can access Render status.")
+    else:
+        render_render_status(auth_headers)
 
 elif page == "Historical Reports":
     render_historical_reports_page(

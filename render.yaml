@@ -3,7 +3,7 @@ services:
     name: emergeai-backend
     env: python
     rootDir: .
-    buildCommand: pip install -r backend/requirements.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
 
     envVars:
@@ -25,13 +25,25 @@ services:
       - key: CORS_ORIGINS
         sync: false
 
+      - key: RENDER
+        value: true
+
+      - key: MODEL_PATH
+        value: models/triage_xgboost_balanced.pkl
+
+      - key: FEATURE_COLUMNS_PATH
+        value: models/emergency_feature_columns.pkl
+
   - type: web
     name: emergeai-frontend
     env: python
     rootDir: .
-    buildCommand: pip install -r frontend/requirements.txt
-    startCommand: python frontend/run.py
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run frontend/app.py --server.port $PORT --server.address 0.0.0.0
 
     envVars:
       - key: API_URL
         sync: false
+
+      - key: RENDER
+        value: true
