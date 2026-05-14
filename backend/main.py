@@ -525,8 +525,17 @@ if os.path.exists(MODEL_PATH):
     model = joblib.load(MODEL_PATH)
     print("Retrained model loaded.")
 else:
-    model = joblib.load(DEFAULT_MODEL_PATH)
+    #model = joblib.load(DEFAULT_MODEL_PATH)
+    try:
+        model = joblib.load(DEFAULT_MODEL_PATH)
+        MODEL_AVAILABLE = True
+    except Exception as e:
+        print(f"Model load failed: {e}")
+        model = None
+        MODEL_AVAILABLE = False
     print("Default model loaded.")
+
+
 
 label_encoder = joblib.load(get_model_path("esi_label_encoder.pkl"))
 
@@ -1554,6 +1563,13 @@ def predict(
 ):
     patient_dict = patient.dict()
     model_input_dict, input_df = prepare_model_input(patient_dict)
+
+    #try:
+        #raw_prediction = model.predict(input_df)
+    if not MODEL_AVAILABLE:
+        return {
+            "error": "Model not available in deployment"
+    }
 
     try:
         raw_prediction = model.predict(input_df)
