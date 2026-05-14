@@ -1,0 +1,526 @@
+Upgrade my existing EmergeAI Healthcare project into a more realistic working emergency hospital system based on the current README.md.
+
+GOAL:
+Review the existing README.md and current codebase, then implement all missing workflow features needed to make the system behave like a real emergency department system.
+
+IMPORTANT:
+Do not delete existing features. Do not break current FastAPI, Streamlit, ML prediction, authentication, registration, approvals, nurse workflow, historical report upload, image assessment, PDF reports, analytics, or emergency queue.
+
+CURRENT PROJECT FEATURES FROM README:
+The project already includes FastAPI backend, Streamlit frontend, PostgreSQL, XGBoost ESI triage prediction, NLP symptom extraction, image analysis, SHAP explainability, PDF reports, role-based access, patient registration, admin approvals, hierarchical approval, historical medical report upload, triage upload, emergency queue, and patient-nurse assignment endpoints.
+
+PROBLEM TO FIX:
+Patients are entering the waiting queue, but nurses are not being assigned automatically. The queue shows:
+- assignment_status = waiting
+- assigned_nurse = Unassigned
+
+MAIN GOAL:
+Make the full hospital workflow work realistically from patient registration to doctor review.
+
+====================================================
+PART 1: REALISTIC END-TO-END HOSPITAL FLOW
+====================================================
+
+Implement and connect this full workflow:
+
+1. Patient registers
+2. Patient account status becomes pending
+3. Doctor or hospital admin approves patient
+4. Patient becomes active
+5. Patient enters triage workflow
+6. Patient vitals and symptoms are entered
+7. Optional past medical report/image is uploaded
+8. AI predicts:
+   - ESI level
+   - ICU risk
+   - readmission risk
+9. Patient is inserted into emergency waiting queue
+10. Auto nurse assignment runs immediately
+11. Nurse is assigned within 1-3 seconds if available
+12. Nurse sees only assigned patients
+13. Nurse starts triage and adds notes/vitals/tasks
+14. Nurse sends patient to doctor review
+15. Doctor reviews:
+   - AI prediction
+   - nurse notes
+   - uploaded historical reports/images
+   - risk flags
+16. Doctor adds diagnosis/treatment/review notes
+17. Case can be marked completed
+18. PDF clinical report is generated
+19. Dashboards and analytics update
+
+====================================================
+PART 2: FIX AUTO NURSE ASSIGNMENT
+====================================================
+
+Fix automatic nurse assignment so waiting patients do not remain Unassigned when active nurses exist.
+
+Create or update:
+- src/assignment_engine.py
+- src/queue_manager.py
+- backend/routes/assignment_routes.py
+- frontend/waiting_queue.py
+- frontend/nurse_dashboard.py
+- frontend/admin_dashboard.py
+- frontend/doctor_dashboard.py
+- app.py or frontend/app.py
+
+Auto-assignment rules:
+1. Find active users with role = "nurse" and account_status = "active".
+2. Also support existing nurses table if project uses separate nurse records.
+3. Calculate each nurse workload:
+   - active assigned patients
+   - critical patients
+   - current assignment_status in assigned, in_triage, doctor_review
+4. Choose the least busy available nurse.
+5. For ESI 1 or ESI 2 patients:
+   - prefer experienced/senior/critical-care nurse if such field exists
+   - otherwise choose least busy nurse
+6. Update patient/queue/prediction assignment fields:
+   - assigned_nurse_id
+   - assigned_nurse_name
+   - assignment_status = "assigned"
+   - assigned_at = current datetime
+7. If no active nurses exist:
+   - keep assignment_status = "waiting"
+   - assigned_nurse_name = "Unassigned"
+   - show clear message: "No active nurses available"
+8. Assignment should run automatically after:
+   - live prediction creates queue record
+   - emergency queue record is created
+   - patient is approved if queue already exists
+   - manual “Auto Assign Waiting Patients” button is clicked
+9. Add assignment audit log.
+
+Expected result:
+Waiting queue should change from:
+Patient #8 | ESI 1 | Critical | waiting | Unassigned
+
+to:
+Patient #8 | ESI 1 | Critical | assigned | Nurse Sarah
+
+====================================================
+PART 3: WAITING QUEUE DASHBOARD
+====================================================
+
+Create/fix Waiting Queue page.
+
+Show:
+- Patient ID
+- Patient Name
+- ESI Level
+- Priority
+- ICU Risk
+- Readmission Risk
+- Assignment Status
+- Assigned Nurse
+- Wait Time
+- Uploaded Report/Image indicator
+- Created At
+
+Sort by:
+1. ESI level ascending
+2. ICU risk descending
+3. wait time descending
+
+Buttons:
+- Auto Assign All Waiting Patients
+- Assign Nurse
+- Reassign Nurse
+- View History
+- View Uploaded Report/Image
+- Start Triage
+- Send to Doctor
+- Mark Completed
+
+Rules:
+- Admin and doctor can assign/reassign nurses.
+- Nurse cannot assign/reassign.
+- Nurse sees only assigned patients.
+- Patient cannot see queue.
+
+====================================================
+PART 4: NURSE WORKLOAD SYSTEM
+====================================================
+
+Create/fix Nurse Workload page.
+
+Show:
+- Nurse ID
+- Nurse Name
+- Role
+- Account Status
+- Active Patients
+- Critical Patients
+- Assigned Patients
+- In Triage Patients
+- Doctor Review Patients
+- Availability Status
+
+Availability logic:
+- Available = 0-3 active patients
+- Busy = 4-6 active patients
+- Critical Load = 7+ active patients
+
+Add:
+- color-coded workload cards
+- refresh button
+- empty-state message if no nurses exist
+- warning message if no active nurses are available
+
+====================================================
+PART 5: MANUAL ASSIGNMENT FALLBACK
+====================================================
+
+Add manual nurse assignment.
+
+Admin/Doctor can:
+- select patient
+- choose nurse from dropdown
+- assign nurse
+- reassign nurse
+
+Validation:
+- selected nurse must be active
+- selected nurse must have role nurse
+- patient must not be completed
+- lower roles cannot assign
+- nurse cannot assign themselves
+- patient cannot assign nurse
+
+====================================================
+PART 6: API ROUTES REQUIRED
+====================================================
+
+Create or fix these FastAPI routes:
+
+GET /api/assignments/waiting-queue
+GET /api/assignments/nurse-workload
+POST /api/assignments/auto-assign
+POST /api/assignments/auto-assign-all
+POST /api/assignments/assign-nurse
+POST /api/assignments/reassign-nurse
+POST /api/assignments/update-status
+GET /api/assignments/my-patients
+GET /api/assignments/patient/{patient_id}
+
+Make sure router is registered in backend/main.py:
+
+from backend.routes.assignment_routes import router as assignment_router
+app.include_router(assignment_router, prefix="/api/assignments", tags=["Assignments"])
+
+If the project already uses different structure, adapt safely but keep these routes working.
+
+====================================================
+PART 7: BACKEND HEALTH + CONNECTION FIX
+====================================================
+
+Make sure backend runs correctly with:
+
+python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+
+Add or verify:
+
+GET /health
+
+Response:
+{
+  "status": "ok",
+  "message": "EmergeAI backend running"
+}
+
+Frontend API base URL should be:
+http://127.0.0.1:8000
+
+Add friendly frontend error:
+"Backend is offline. Start FastAPI first."
+
+Do not show raw connection errors to users.
+
+====================================================
+PART 8: REGISTRATION APPROVAL + NEW PATIENT VISIBILITY
+====================================================
+
+Make sure registration approval follows realistic hierarchy:
+
+super_admin:
+- approves admin
+
+admin:
+- approves doctor
+- approves nurse
+- approves patient
+
+doctor:
+- approves patient
+
+nurse:
+- can view newly registered patients only
+- cannot approve/reject patients
+
+patient:
+- no approval access
+
+When a patient registers:
+1. account_status = "pending"
+2. appears in admin and doctor approval queue
+3. appears in nurse New Patients table as view-only
+4. after approval, patient can log in
+5. after live prediction, patient enters queue
+
+====================================================
+PART 9: TRIAGE UPLOAD CONNECTION
+====================================================
+
+Inside Live Prediction / Triage Dashboard, after vitals entry, keep optional upload:
+
+Supported:
+- pdf
+- txt
+- csv
+- docx
+- jpg
+- jpeg
+- png
+
+After upload:
+- extract text
+- image preview if image
+- image metadata
+- OCR if available
+- detect conditions
+- generate risk flags
+- generate doctor/nurse summary
+
+The upload analysis should support triage result but not override ML prediction.
+
+Show:
+- Historical Context
+- Risk Flags
+- OCR Preview
+- Image Metadata
+- Doctor/Nurse Summary
+
+====================================================
+PART 10: PDF REPORT UPDATE
+====================================================
+
+PDF report should include:
+- patient information
+- vitals
+- ESI prediction
+- ICU risk
+- readmission risk
+- assignment nurse
+- queue status
+- uploaded report/image summary
+- risk flags
+- nurse notes
+- doctor notes
+- disclaimer
+
+====================================================
+PART 11: DATABASE MODEL REQUIREMENTS
+====================================================
+
+Update models safely if missing.
+
+User/app user fields:
+- id
+- full_name
+- username
+- email
+- password_hash
+- requested_role
+- role
+- account_status
+- created_at
+- approved_by
+- approved_at
+- rejected_by
+- rejected_at
+- rejected_reason
+
+Patient/queue/prediction assignment fields:
+- assigned_nurse_id
+- assigned_nurse_name
+- assigned_doctor_id
+- assigned_doctor_name
+- assignment_status
+- assigned_at
+- triage_started_at
+- doctor_review_at
+- completed_at
+
+Triage upload fields:
+- patient_id
+- patient_name
+- uploaded_by
+- uploaded_by_role
+- file_name
+- file_path
+- file_type
+- report_type
+- extracted_text
+- ocr_text
+- image_metadata
+- image_quality_notes
+- detected_conditions
+- risk_flags
+- clinical_summary
+- uploaded_at
+
+Use Base.metadata.create_all for development if Alembic is not present.
+
+====================================================
+PART 12: REAL SYSTEM DASHBOARD PAGES
+====================================================
+
+Make sure each role has realistic pages.
+
+Super Admin:
+- system users
+- admin approvals
+- audit logs
+- system analytics
+
+Hospital Admin:
+- approvals
+- waiting queue
+- nurse workload
+- staff management
+- analytics
+
+Doctor:
+- patient approvals
+- waiting queue
+- assigned/doctor-review patients
+- historical reports
+- AI prediction review
+- doctor notes
+- reports
+
+Nurse:
+- new patients view-only
+- assigned patients
+- start triage
+- enter vitals
+- upload reports/images
+- nurse notes/tasks
+- emergency queue limited view
+
+Patient:
+- patient demo mode
+- own upload
+- own summary
+- own report
+
+====================================================
+PART 13: SEED / TEST DATA
+====================================================
+
+Add a safe development seed script or button to create test data.
+
+Create:
+- one active admin
+- one active doctor
+- three active nurses
+- sample pending patient
+- sample queue patients
+
+Do not overwrite existing real data.
+
+Suggested file:
+scripts/seed_demo_data.py
+
+Command:
+python scripts/seed_demo_data.py
+
+Demo nurses:
+- Nurse Sarah
+- Nurse Emily
+- Nurse Michael
+
+They should be active and available so auto-assignment can be tested.
+
+====================================================
+PART 14: FRONTEND ERROR HANDLING
+====================================================
+
+Fix UI so raw errors do not appear.
+
+Instead of:
+{"detail":"Not Found"}
+
+Show:
+"Feature route not available. Please start backend or check API route."
+
+Instead of:
+Connection refused
+
+Show:
+"Backend is offline. Start FastAPI using the backend command."
+
+If no data:
+- "No waiting patients found."
+- "No active nurses found."
+- "No assigned patients yet."
+
+====================================================
+PART 15: TESTING CHECKLIST
+====================================================
+
+After implementation, tell me how to test:
+
+1. Start backend
+2. Start frontend
+3. Login as admin
+4. Create/approve nurse
+5. Create/approve patient
+6. Run live prediction
+7. Confirm patient enters queue
+8. Confirm nurse auto-assigned
+9. Check nurse workload
+10. Login as nurse
+11. Confirm nurse sees assigned patient
+12. Start triage
+13. Upload past medical report/image
+14. Send to doctor
+15. Login as doctor
+16. Review patient
+17. Generate PDF
+
+====================================================
+PART 16: IMPORTANT RULES
+====================================================
+
+1. Do not delete existing folders.
+2. Do not remove existing features from README.
+3. Do not break authentication.
+4. Do not break prediction.
+5. Do not break report/image upload.
+6. Do not break PDF generation.
+7. Keep code modular.
+8. Use Windows-friendly relative paths.
+9. Add comments for important logic.
+10. Add backend RBAC checks, not only frontend hiding.
+11. Use safe medical wording.
+12. Do not provide final diagnosis.
+13. Update README.md with:
+   - realistic workflow
+   - nurse assignment flow
+   - queue flow
+   - testing commands
+   - troubleshooting backend connection
+   - demo data seeding
+
+After implementation, explain:
+- exactly which files were created
+- exactly which files were updated
+- why nurse assignment was not working
+- how auto-assignment works now
+- how to test waiting queue
+- how to test nurse workload
+- how to test nurse dashboard
+- how to run backend and frontend

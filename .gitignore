@@ -1,0 +1,124 @@
+# =========================
+# Python
+# =========================
+venv/
+env/
+ENV/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# =========================
+# Environment Variables
+# =========================
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env
+
+# =========================
+# Database
+# =========================
+*.db
+*.sqlite3
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Streamlit
+# =========================
+.streamlit/
+
+# =========================
+# Logs
+# =========================
+logs/
+*.log
+
+# =========================
+# Model Backups
+# =========================
+backend/models/backups/
+models/backups/
+
+# =========================
+# Generated Reports
+# =========================
+reports/*.pdf
+backend/reports/*.pdf
+
+# Historical uploads
+reports/historical_reports/
+reports/triage_uploads/
+
+# =========================
+# SHAP Outputs
+# =========================
+shap_outputs/
+
+# =========================
+# Jupyter Notebook
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Build / Distribution
+# =========================
+build/
+dist/
+*.egg-info/
+
+# =========================
+# Temporary Files
+# =========================
+temp/
+tmp/
+*.tmp
+
+# =========================
+# Testing / Cache
+# =========================
+.pytest_cache/
+.mypy_cache/
+
+# =========================
+# Node Modules (if added later)
+# =========================
+node_modules/
+
+# =========================
+# Large ML Artifacts (Optional)
+# Uncomment if models are too large
+# =========================
+# *.pkl
+# *.joblib
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.h5
+*.rdata
+*.csv
+*.pdf
+data/
+models/
+backend/models/
+reports/
+shap_outputs/
+*.csv
+*.rdata
+*.pkl
+*.joblib

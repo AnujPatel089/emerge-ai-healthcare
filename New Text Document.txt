@@ -1,0 +1,34 @@
+dataset link :- https://www.kaggle.com/datasets/maalona/hospital-triage-and-patient-history-data?utm_source=chatgpt.com
+
+virtual environment :-
+
+windows :-
+.\venv\Scripts\Activate.ps1
+
+mac:-
+source venv/bin/activate
+
+Install Dependencies :-
+pip install -r requirement.txt
+
+backend:-
+pip install -r backend/requirements.txt
+
+frontend:-
+pip install -r frontend/requirements.txt
+
+backend terminal :-
+
+cd "E:\Personal Project\Sem 2\emergency-triage-ai"
+.\venv\Scripts\Activate.ps1
+uvicorn main:app --reload --port 9000
+
+http://127.0.0.1:9000/docs
+
+frontend terminal :-
+
+cd "E:\Personal Project\Sem 2\emergency-triage-ai"
+.\venv\Scripts\Activate.ps1
+streamlit run frontend/app.py
+
+http://localhost:8501
