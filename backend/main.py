@@ -41,7 +41,7 @@ from src.email_service import send_doctor_report_email
 from src.safety_rules import apply_safety_rules
 from src.shap_explainer import generate_clinical_explanation
 from src.audit_logger import save_prediction_log
-from src.shap_visualizer import initialize_shap
+#from src.shap_visualizer import initialize_shap
 from src.symptom_extractor import extract_symptoms
 from src.image_analyzer import analyze_medical_image
 from src.report_text_extractor import SUPPORTED_EXTENSIONS, extract_text_from_file
@@ -52,6 +52,11 @@ from src.clinical_summary_generator import DISCLAIMER as HISTORICAL_REPORT_DISCL
 from src.assignment_engine import auto_assign_nurse, assign_nurse_to_prediction, refresh_nurse_workload, sync_active_nurse_users
 from src.queue_manager import ensure_emergency_queue_entry, ordered_queue_query, queue_priority_from_prediction
 
+try:
+    from src.shap_visualizer import initialize_shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
 from src.database import Base, engine, SessionLocal, get_db
 from src.models import (
     AppUser,
@@ -521,7 +526,9 @@ else:
 
 label_encoder = joblib.load(get_model_path("esi_label_encoder.pkl"))
 
-initialize_shap(model)
+#initialize_shap(model)
+if SHAP_AVAILABLE:
+    initialize_shap()
 
 
 # -----------------------------
