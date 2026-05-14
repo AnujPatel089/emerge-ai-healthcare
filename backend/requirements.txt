@@ -5,7 +5,7 @@ numpy
 scikit-learn
 xgboost
 joblib
-shap
+#shap
 sqlalchemy
 psycopg2-binary
 python-dotenv
@@ -16,8 +16,8 @@ pillow
 opencv-python-headless
 matplotlib
 reportlab
-torch
-torchvision
+#torch
+#torchvision
 SpeechRecognition
 pydub
 bcrypt

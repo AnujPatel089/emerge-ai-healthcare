@@ -4,18 +4,24 @@ services:
     env: python
     rootDir: .
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: python backend/run.py
+    startCommand: python -m uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+
     envVars:
       - key: HOST
         value: 0.0.0.0
-      - key: PORT
-        value: 8000
+
       - key: RELOAD
         value: false
+
       - key: SECRET_KEY
         sync: false
+
       - key: DATABASE_URL
         sync: false
+
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 60
+
       - key: CORS_ORIGINS
         sync: false
 
@@ -25,6 +31,7 @@ services:
     rootDir: .
     buildCommand: pip install -r frontend/requirements.txt
     startCommand: python frontend/run.py
+
     envVars:
       - key: API_URL
         sync: false
