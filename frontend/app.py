@@ -37,7 +37,7 @@ except Exception:
 
 API_URL = os.getenv(
     "API_URL",
-    "https://emerge-ai-healthcare.onrender.com"
+    "https://emerge-ai-healthcare-1.onrender.com"
 )
 
 st.set_page_config(
