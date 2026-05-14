@@ -538,6 +538,20 @@ def to_python_value(value):
     return value
 
 
+def format_esi_label(value) -> str:
+    """Convert any numeric ESI value (int, float, numpy scalar) to 'ESI X' string.
+
+    The label encoder inverse_transform returns the original label type from the
+    training dataset (numpy int64 if ESI was stored as integer, str if as string).
+    This normalises all forms to the 'ESI X' label the frontend expects, matching
+    the format produced by the rule-based fallback.
+    """
+    try:
+        return f"ESI {int(float(str(value)))}"
+    except (ValueError, TypeError):
+        return str(value) if value is not None else "Unknown"
+
+
 # -----------------------------
 # LOAD MODEL
 # -----------------------------
@@ -1935,14 +1949,22 @@ def predict(
         else:
             ml_prediction_encoded = int(raw_prediction[0])
 
-        ml_prediction = local_label_encoder.inverse_transform([ml_prediction_encoded])[0]
-    
+        # inverse_transform returns the original label type from training
+        # (numpy int64 if ESI column was integer, str if stored as string).
+        # Convert to plain Python int so apply_safety_rules can do numeric
+        # comparisons safely regardless of training dataset dtype.
+        raw_label = local_label_encoder.inverse_transform([ml_prediction_encoded])[0]
+        ml_prediction = int(float(str(raw_label)))
+
         probabilities = local_model.predict_proba(input_df)[0]
-        classes = local_label_encoder.inverse_transform(local_model.classes_)
+        # Pipeline.classes_ returns the XGBClassifier's internal class indices
+        # (0-based). Inverse-transform them back to ESI integers for the dict keys.
+        pipeline_classes = local_model.classes_ if hasattr(local_model, "classes_") else list(range(len(probabilities)))
+        esi_classes = local_label_encoder.inverse_transform(pipeline_classes)
 
         probability_dict = {
-            str(classes[i]): float(probabilities[i])
-            for i in range(len(classes))
+            format_esi_label(esi_classes[i]): float(probabilities[i])
+            for i in range(len(esi_classes))
         }
 
         confidence = float(max(probabilities))
@@ -2016,10 +2038,13 @@ def predict(
         reasons
     )
 
+    ml_label = format_esi_label(ml_prediction)
+    final_label = format_esi_label(final_prediction)
+
     log_id = save_prediction_log(
         patient_data=patient_dict,
-        ml_prediction=str(ml_prediction),
-        final_prediction=str(final_prediction),
+        ml_prediction=ml_label,
+        final_prediction=final_label,
         safety_reasons=reasons,
         clinical_explanations=explanations,
         confidence=confidence,
@@ -2094,8 +2119,8 @@ def predict(
         "role": current_user["role"],
         "prediction_id": log_id,
         "log_id": log_id,
-        "ml_prediction": str(ml_prediction),
-        "final_prediction": str(final_prediction),
+        "ml_prediction": ml_label,
+        "final_prediction": final_label,
         "confidence": confidence,
         "safety_reasons": reasons,
         "clinical_explanations": explanations,
