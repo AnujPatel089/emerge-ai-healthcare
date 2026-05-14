@@ -518,29 +518,69 @@ def get_model_path(filename: str) -> Path:
 
     return PROJECT_MODELS_DIR / filename
 
-MODEL_PATH = get_model_path("triage_xgboost_balanced.pkl")
-DEFAULT_MODEL_PATH = get_model_path("triage_xgboost.pkl")
+#MODEL_PATH = get_model_path("triage_xgboost_balanced.pkl")
+#DEFAULT_MODEL_PATH = get_model_path("triage_xgboost.pkl")
 
-if os.path.exists(MODEL_PATH):
+#if os.path.exists(MODEL_PATH):
     model = joblib.load(MODEL_PATH)
     print("Retrained model loaded.")
-else:
+#else:
     #model = joblib.load(DEFAULT_MODEL_PATH)
-    try:
-        model = joblib.load(DEFAULT_MODEL_PATH)
-        MODEL_AVAILABLE = True
-    except Exception as e:
-        print(f"Model load failed: {e}")
-        model = None
-        MODEL_AVAILABLE = False
-    print("Default model loaded.")
+    #try:
+        #model = joblib.load(DEFAULT_MODEL_PATH)
+        #MODEL_AVAILABLE = True
+    #except Exception as e:
+       #print(f"Model load failed: {e}")
+        #model = None
+        #MODEL_AVAILABLE = False
+    #print("Default model loaded.")
 
 
 
-label_encoder = joblib.load(get_model_path("esi_label_encoder.pkl"))
+#label_encoder = joblib.load(get_model_path("esi_label_encoder.pkl"))
 
 #initialize_shap(model)
-if SHAP_AVAILABLE:
+#if SHAP_AVAILABLE:
+    #initialize_shap()
+
+MODEL_PATH = get_model_path("triage_xgboost_balanced.pkl")
+DEFAULT_MODEL_PATH = get_model_path("triage_xgboost.pkl")
+LABEL_ENCODER_PATH = get_model_path("esi_label_encoder.pkl")
+
+MODEL_AVAILABLE = False
+LABEL_ENCODER_AVAILABLE = False
+
+try:
+    if os.path.exists(MODEL_PATH):
+        model = joblib.load(MODEL_PATH)
+        MODEL_AVAILABLE = True
+        print("Balanced model loaded.")
+    elif os.path.exists(DEFAULT_MODEL_PATH):
+        model = joblib.load(DEFAULT_MODEL_PATH)
+        MODEL_AVAILABLE = True
+        print("Default model loaded.")
+    else:
+        model = None
+        print("No model file found. Running backend without ML model.")
+except Exception as e:
+    print(f"Model load failed: {e}")
+    model = None
+    MODEL_AVAILABLE = False
+
+try:
+    if os.path.exists(LABEL_ENCODER_PATH):
+        label_encoder = joblib.load(LABEL_ENCODER_PATH)
+        LABEL_ENCODER_AVAILABLE = True
+        print("Label encoder loaded.")
+    else:
+        label_encoder = None
+        print("No label encoder file found. Running without label encoder.")
+except Exception as e:
+    print(f"Label encoder load failed: {e}")
+    label_encoder = None
+    LABEL_ENCODER_AVAILABLE = False
+
+if SHAP_AVAILABLE and MODEL_AVAILABLE:
     initialize_shap()
 
 
@@ -1566,7 +1606,8 @@ def predict(
 
     #try:
         #raw_prediction = model.predict(input_df)
-    if not MODEL_AVAILABLE:
+    #if not MODEL_AVAILABLE:
+    if not MODEL_AVAILABLE or not LABEL_ENCODER_AVAILABLE:
         return {
             "error": "Model not available in deployment"
     }
